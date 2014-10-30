@@ -48,6 +48,8 @@ class dataset_oakland(object):
         self.features = numpy.hstack((self.points_normalized, self.features))
 
         self.label_map  = {'veg' : 1004, 'wire' : 1100, 'pole':  1103, 'ground' : 1200, 'facade' : 1400}
+        self.label2ind = {1004:0, 1100:1, 1103:2, 1200:3, 1400:4}
+        self.ind2label = [1004, 1100, 1103, 1200, 1400]
 
         for (label_type, val) in self.label_map.items():
             setattr(self, '{}_inds'.format(label_type), self.labels == val)
@@ -56,7 +58,7 @@ def main():
     line_skip = 3
 
     do = dataset_oakland(numpy_fn = 'data/oakland_part3_am_rf.node_features.npz')
-    test_scikit_learner()
+    #test_scikit_learner()
     pdb.set_trace()
 
 if __name__ == '__main__':

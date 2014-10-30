@@ -15,7 +15,7 @@ class online_learner(object):
   def fit(self, x, y, t):
     pass
 
-  def compute_single_loss(self, y_gt, y_p):
+  def compute_single_loss(self, y_gt, y_p, x=None):
     pass
 
   def evaluate(self, X, Y):
@@ -32,7 +32,7 @@ class online_learner(object):
       y_p = self.predict(x)
       Y_p[xi] = y_p
 
-      loss = self.compute_single_loss(Y[xi], y_p)
+      loss = self.compute_single_loss(Y[xi], y_p, x)
       total_loss += loss
       losses[xi] = loss
       
@@ -49,7 +49,6 @@ class online_logistic(online_learner):
 
     def fit(x, y):
         pass
-
 
 class online_svm(online_learner):
   def __init__(self, lam, feature_size, margin = 1):
@@ -69,7 +68,7 @@ class online_svm(online_learner):
     y_p = numpy.dot(self.w.T, x)
     return y_p
     
-  def compute_single_loss(self, y_gt, y_p):
+  def compute_single_loss(self, y_gt, y_p, x=None):
     prod = y_gt * y_p
     loss = max(0, self.margin - prod) + self.lam  * numpy.dot(self.w.T, self.w) / 2.0
     return loss
@@ -84,15 +83,16 @@ class online_svm(online_learner):
 
     if not do_batch:
       self.w += grad
-      
-      wtw = numpy.dot(self.w.T, self.w)
-      if wtw > 1.0 / self.lam:
-        self.w = self.w / (numpy.sqrt(wtw) * (self.sqrt_lam))    
     else:
       self.cur_grad += grad
       if self.t % self.batch_size == 0:
           self.w += self.cur_grad / float(self.batch_size)
           self.cur_grad = numpy.zeros((self.feature_size,))
+    
+    # Note from echo: renormalization was not done to batch version... 
+    wtw = numpy.dot(self.w.T, self.w)
+    if wtw > 1.0 / self.lam:
+      self.w = self.w / (numpy.sqrt(wtw) * (self.sqrt_lam))    
 
     self.t += 1
     return self.w
@@ -107,38 +107,130 @@ class online_svm(online_learner):
     X_norm = X / numpy.linalg.norm(X, axis = 1)[:, numpy.newaxis]
     return super(online_svm, self).evaluate(X, Y)
 
+
+class online_multi_svm(online_learner):
+    # K: nbr of classes
+    # D: nbr of feature dimension
+    def __init__(self, lam, nbr_classes, feature_size, margin=1):
+        self.lam = float(lam)
+        self.sqrt_lam = numpy.sqrt(self.lam)
+        self.K = nbr_classes
+        self.D = feature_size
+        self.w = numpy.zeros((self.K, self.D), dtype = numpy.float64)
+
+        self.margin=1
+        self.t = 1
+        self.batch_size = 20
+        self.cur_grad = numpy.zeros_like(self.w)
+        
+    def predict(self, x):
+        y_p = np.argmax(numpy.dot(self.w, x))
+        return y_p
+
+    def compute_margin(self, y_gt, x, compete=False):
+        score = self.w.dot(x)
+        mask = np.ones((self.K,), dtype=bool)
+        mask[y_gt] = False
+        if not compete:
+            return -max(score[mask]) + score[y_gt]
+
+        y_c = np.argmax(score[mask])
+        y_c += y_c >= y_gt
+        score_c = score[y_c]
+
+        #assert(score[y_c] == score_c)
+        #for i in range(self.K):
+        #    assert(score_c >= score[i] or i == y_gt)
+        return -score_c + score[y_gt], y_c 
+
+        
+    def compute_single_loss(self, y_gt, y_p, x):
+        return max(0, 1 - self.compute_margin(y_gt, x)) + self.lam * np.sum(self.w * self.w) / 2.0
+        
+    def fit(self, x, y_gt, do_batch = True):
+        alpha = 1.0 / (self.lam * self.t)
+        margin, y_c = self.compute_margin(y_gt, x, compete=True)
+        grad = - alpha * self.lam * self.w
+        if margin < self.margin:
+            alpha_x = alpha * x
+            grad[y_gt, :] += alpha_x
+            grad[y_c, :] -= alpha_x
+
+        if not do_batch:
+            self.w += grad
+            w_norm = np.linalg.norm(self.w)
+            if w_norm > 1.0 / self.lam:
+                self.w = self.w / (w_norm * (self.sqrt_lam))        
+        else:
+            self.cur_grad += grad
+            if self.t % self.batch_size == 0:
+                self.w += self.cur_grad / float(self.batch_size)
+                self.cur_grad = numpy.zeros_like(self.w)
+                w_norm = np.linalg.norm(self.w)
+                if w_norm > 1.0 / self.lam:
+                    self.w = self.w / (w_norm * (self.sqrt_lam))        
+
+        self.t += 1
+        return self.w
+
+    def evaluate(self, X, Y):
+        inds = range(Y.shape[0])
+        numpy.random.shuffle(inds)
+        
+        X = X[inds, :]
+        Y = Y[inds, :]
+
+        X_norm = X / numpy.linalg.norm(X, axis = 1)[:, numpy.newaxis]
+        return super(online_multi_svm, self).evaluate(X, Y)
+
 def main():
-  do_svm = True
-  
-  data_o = convert.dataset_oakland(numpy_fn = 'data/oakland_part3_am_rf.node_features.npz')
+    data_o = convert.dataset_oakland(numpy_fn = 'data/oakland_part3_am_rf.node_features.npz')
+    method = 'multi_svm'
 
-  lam = 1e-4
-  osvm = online_svm(lam = lam, feature_size = data_o.features.shape[1])
-  
-  
+    if method == 'svm':
 
-  wall_and_ground_inds = numpy.where(numpy.logical_or(data_o.facade_inds, data_o.ground_inds))[0]
+        lam = 1e-4
+        osvm = online_svm(lam = lam, feature_size = data_o.features.shape[1])
 
-  Y = data_o.labels[wall_and_ground_inds]
-  X = data_o.features[wall_and_ground_inds, :]
+        wall_and_ground_inds = numpy.where(numpy.logical_or(data_o.facade_inds, data_o.ground_inds))[0]
 
-  Y[Y == data_o.label_map['facade']] = -1
-  Y[Y == data_o.label_map['ground']] = 1
+        Y = data_o.labels[wall_and_ground_inds]
+        X = data_o.features[wall_and_ground_inds, :]
 
-  ypred, losses = osvm.evaluate(X, Y)
-  
-  classification = ypred > 0
-  n_right = (classification == (Y > 0)).sum()
-  accuracy = n_right / float(Y.shape[0])
+        Y[Y == data_o.label_map['facade']] = -1
+        Y[Y == data_o.label_map['ground']] = 1
 
-  cum_losses = numpy.cumsum(losses - osvm.lam * numpy.dot(osvm.w.T, osvm.w) / 2.)
+        ypred, losses = osvm.evaluate(X, Y)
 
-  print "right, accuracy: {}, {}".format(n_right, accuracy)
-  print "w: {}".format(osvm.w)
-  plt.figure()
-  plt.plot(range(losses.shape[0]), (cum_losses) / osvm.t)
-  plt.show(block = False)
+        classification = ypred > 0
+        n_right = (classification == (Y > 0)).sum()
+        accuracy = n_right / float(Y.shape[0])
 
-  pdb.set_trace()
+    elif method == 'multi_svm':
+        
+        lam = 4e-4
+        osvm = online_multi_svm(lam=lam, nbr_classes=5, feature_size = data_o.features.shape[1])
+
+        X = data_o.features
+        Y = np.array([ [data_o.label2ind[l[0]]] for l in data_o.labels ])
+
+        ypred, losses = osvm.evaluate(X,Y)
+
+        n_right = np.sum(ypred == Y)
+        accuracy = np.sum(ypred == Y) / float(Y.shape[0])
+
+
+    cum_losses = numpy.cumsum(losses - osvm.lam * np.sum(osvm.w * osvm.w) / 2.)
+
+    print "right, accuracy: {}, {}".format(n_right, accuracy)
+    print "w: {}".format(osvm.w)
+    plt.figure()
+    plt.plot(range(losses.shape[0]), (cum_losses) / osvm.t)
+    plt.show(block = False)
+
+
+
+    pdb.set_trace()
+
 if __name__ == '__main__':
   main()
