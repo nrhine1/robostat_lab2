@@ -26,7 +26,7 @@ class online_learner(object):
     total_loss = 0
 
     for (xi, x) in enumerate(X):
-      if xi % 10 == 0:
+      if xi % 1000 == 0:
         print "round ", xi, total_loss
 
       y_p = self.predict(x)
@@ -41,14 +41,14 @@ class online_learner(object):
     return Y_p, losses
 
 class online_logistic(online_learner):
-  def __init__(self, l2_lam):
-    pass
+    def __init__(self, l2_lam):
+        pass
 
-  def predict(x):
-    pass
+    def predict(x):
+        pass
 
-  def fit(x, y):
-    pass
+    def fit(x, y):
+        pass
 
 
 class online_svm(online_learner):
@@ -57,9 +57,13 @@ class online_svm(online_learner):
     self.w = numpy.zeros((feature_size,), dtype = numpy.float64)
 
     self.t = 1
-    self.batch_size = 100
+    self.batch_size = 20
     self.margin = margin
     self.sqrt_lam = numpy.sqrt(self.lam)
+    
+    self.feature_size = feature_size
+    self.cur_grad = numpy.zeros((self.feature_size,))
+    self.batch_grads = numpy.zeros((feature_size, self.batch_size))
     
   def predict(self, x):
     y_p = numpy.dot(self.w.T, x)
@@ -70,7 +74,7 @@ class online_svm(online_learner):
     loss = max(0, self.margin - prod) + self.lam  * numpy.dot(self.w.T, self.w) / 2.0
     return loss
     
-  def fit(self, x, y_gt, do_batch = False):
+  def fit(self, x, y_gt, do_batch = True):
     alpha = 1.0 / (self.lam * self.t)
     y_p = self.predict(x)
     if y_gt * y_p < self.margin:
@@ -83,7 +87,12 @@ class online_svm(online_learner):
       
       wtw = numpy.dot(self.w.T, self.w)
       if wtw > 1.0 / self.lam:
-        self.w = self.w / (numpy.sqrt(wtw) * (self.sqrt_lam))
+        self.w = self.w / (numpy.sqrt(wtw) * (self.sqrt_lam))    
+    else:
+      self.cur_grad += grad
+      if self.t % self.batch_size == 0:
+          self.w += self.cur_grad / float(self.batch_size)
+          self.cur_grad = numpy.zeros((self.feature_size,))
 
     self.t += 1
     return self.w
@@ -127,10 +136,9 @@ def main():
   print "right, accuracy: {}, {}".format(n_right, accuracy)
   print "w: {}".format(osvm.w)
   plt.figure()
-  plt.plot(range(losses.shape[0]), cum_losses)
+  plt.plot(range(losses.shape[0]), (cum_losses) / osvm.t)
   plt.show(block = False)
 
   pdb.set_trace()
-
 if __name__ == '__main__':
   main()
