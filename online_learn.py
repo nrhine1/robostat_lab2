@@ -110,8 +110,54 @@ class online_svm(online_learner):
     return super(online_svm, self).evaluate(X_norm, Y)
 
 class online_exponentiated_sq_loss(online_learner):
-  def __init__(self):
-    pass
+    def __init__(self, nbr_classes, feature_size, lam=1e-3, grad_scale=1.0):
+        self.t = 1.0
+        self.lam=lam
+        self.lam_inv = 1.0 / lam
+        self.eta = grad_scale
+        self.K = nbr_classes
+        self.D = feature_size
+        self.w = np.ones((nbr_classes, feature_size), dtype=np.float64) / self.D
+
+    def compute_single_loss(self, y_gt, y_p, x):
+        return 0
+    
+    def predict(self, x):
+        return np.argmax(np.dot(self.w, x))
+
+    def fit(self, x, y_gt, do_batch = True): 
+        score = np.dot(self.w, x)
+        y_gt_one_hot = self.one_hot(y_gt)
+        grad = (self.w + np.outer(score - y_gt_one_hot, x) * self.lam_inv) / self.t
+        self.w *= np.exp(-grad * self.eta) 
+        
+        w_sum = np.sum(self.w, axis=1)[:, np.newaxis]
+        w_sum += w_sum == 0
+        self.w /= w_sum
+
+        if np.any(np.isnan(self.w)):
+            pdb.set_trace()
+        self.t += 1
+
+    def one_hot(self, y):
+        y_one_hot = np.zeros((self.K,), dtype=np.float64)
+        y_one_hot[y] = 1
+        return y_one_hot
+
+    def evaluate(self, X,Y):
+        inds = range(Y.shape[0])
+        np.random.shuffle(inds)
+
+        X = X[inds, :]
+        Y = Y[inds, :]
+
+        # normalize so that all feature are in [0,1].
+        x_min = np.min(X, axis=0)
+        x_max = np.max(X, axis=0)
+        x_max += x_max == x_min
+
+        X_norm = (X - x_min) / (x_max - x_min)
+        return super(online_exponentiated_sq_loss, self).evaluate(X_norm,Y)
     
     
 
@@ -253,7 +299,7 @@ class online_kernel_svm(online_learner):
 
 def main():
     data_o = convert.dataset_oakland(numpy_fn = 'data/oakland_part3_am_rf.node_features.npz')
-    method = 'kernel_svm'
+    method = 'EG'
 
     if method == 'svm':
 
@@ -274,10 +320,13 @@ def main():
         n_right = (classification == (Y > 0)).sum()
         accuracy = n_right / float(Y.shape[0])
 
-    elif method == 'multi_svm':
+    elif method == 'multi_svm' or method == 'EG':
         
         lam = 4e-4
-        osvm = online_multi_svm(lam=lam, nbr_classes=5, feature_size = data_o.features.shape[1])
+        if method == 'multi_svm':
+            osvm = online_multi_svm(lam=lam, nbr_classes=5, feature_size = data_o.features.shape[1])
+        else:
+            osvm = online_exponentiated_sq_loss(nbr_classes=5, feature_size = data_o.features.shape[1], lam=lam, grad_scale=1e-3)
 
         X = data_o.features
         Y = np.array([ [data_o.label2ind[l[0]]] for l in data_o.labels ])
