@@ -109,6 +109,11 @@ class online_svm(online_learner):
     X_norm = X / numpy.linalg.norm(X, axis = 1)[:, numpy.newaxis]
     return super(online_svm, self).evaluate(X_norm, Y)
 
+class online_exponentiated_sq_loss(online_learner):
+  def __init__(self):
+    pass
+    
+    
 
 class online_multi_svm(online_learner):
     # K: nbr of classes
@@ -149,6 +154,8 @@ class online_multi_svm(online_learner):
     def compute_single_loss(self, y_gt, y_p, x):
         return max(0, 1 - self.compute_margin(y_gt, x)) + self.lam * np.sum(self.w * self.w) / 2.0
         
+      
+
     def fit(self, x, y_gt, do_batch = True):
         alpha = 1.0 / (self.lam * self.t)
         margin, y_c = self.compute_margin(y_gt, x, compete=True)
