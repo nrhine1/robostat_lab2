@@ -5,18 +5,20 @@ import matplotlib.pyplot as plt
 
 import convert_data_to_numpy as convert
 
+import gtkutils.pdbwrap as pdbw
+
 class online_learner(object):
   def __init__(self):
     pass
 
   def predict(self, x):
-    pass
+    return RuntimeError("not overridden")
 
   def fit(self, x, y, t):
-    pass
+    return RuntimeError("not overridden")
 
   def compute_single_loss(self, y_gt, y_p, x=None):
-    pass
+    return RuntimeError("not overridden")
 
   def evaluate(self, X, Y):
     n_samples = X.shape[0]
@@ -105,7 +107,7 @@ class online_svm(online_learner):
     Y = Y[inds, :]
 
     X_norm = X / numpy.linalg.norm(X, axis = 1)[:, numpy.newaxis]
-    return super(online_svm, self).evaluate(X, Y)
+    return super(online_svm, self).evaluate(X_norm, Y)
 
 
 class online_multi_svm(online_learner):
@@ -181,11 +183,70 @@ class online_multi_svm(online_learner):
         Y = Y[inds, :]
 
         X_norm = X / numpy.linalg.norm(X, axis = 1)[:, numpy.newaxis]
-        return super(online_multi_svm, self).evaluate(X, Y)
+        return super(online_multi_svm, self).evaluate(X_norm, Y)
+
+
+def poly_kernel_func(x0, x1, kernel_params):
+    return numpy.power((numpy.dot(x0, x1) + kernel_params['c']), kernel_params['d'])
+
+class online_kernel_svm(online_learner):
+  def __init__(self, feature_size, lam, kernel_type = 'poly', kernel_params = {'c' : 1, 'd': 2}):
+    self.kernel_type = kernel_type
+    self.kernel_params = kernel_params
+
+    self.sample_weights = numpy.zeros((1,1))
+    self.samples = numpy.zeros((1, feature_size))
+
+    self.feature_size = feature_size
+
+    self.lam = lam
+    self.t = float(1)
+
+
+
+    if self.kernel_type == 'poly':
+      self.kernel_func = poly_kernel_func
+    else:
+      raise RuntimeError("unknown kernel: {}".format(kernel_type))
+      
+  def compute_single_loss(self, y_gt, y_p, x=None):
+    return 0
+
+  def predict(self, x):
+    s = 0
+    for (sample_weight, sample) in zip(self.sample_weights, self.samples):
+      s += sample_weight * self.kernel_func(sample, x, self.kernel_params)
+    return s
+
+  def fit(self, x, y_gt, do_batch = True):
+    f_x = self.predict(x)
+
+    eta = 1. / (self.lam * self.t)
+    # self.sample_weights *= (1 - self.lam * eta)
+    self.sample_weights *= ( 1 - 1. /self.t)
+
+    if 1 - y_gt * f_x > 0:
+      self.samples = numpy.vstack((self.samples, x))
+      self.sample_weights = numpy.vstack((self.sample_weights, y_gt * eta))
+
+    self.t += 1
+
+    #TODO shrink????
+
+  def evaluate(self, X, Y):
+    inds = range(Y.shape[0])
+    numpy.random.shuffle(inds)
+    
+    X = X[inds, :]
+    Y = Y[inds, :]
+
+    # X_norm = X / numpy.linalg.norm(X, axis = 1)[:, numpy.newaxis]
+    return super(self.__class__, self).evaluate(X, Y)
+
 
 def main():
     data_o = convert.dataset_oakland(numpy_fn = 'data/oakland_part3_am_rf.node_features.npz')
-    method = 'multi_svm'
+    method = 'kernel_svm'
 
     if method == 'svm':
 
@@ -219,6 +280,21 @@ def main():
         n_right = np.sum(ypred == Y)
         accuracy = np.sum(ypred == Y) / float(Y.shape[0])
 
+    elif method == 'kernel_svm':
+        
+        lam = 4e-4
+        osvm = online_kernel_svm(lam=lam, feature_size = data_o.features.shape[1])
+
+        X = data_o.features
+        Y = np.array([ [data_o.label2ind[l[0]]] for l in data_o.labels ])
+
+        ypred, losses = osvm.evaluate(X,Y)
+
+        n_right = np.sum(ypred == Y)
+        accuracy = np.sum(ypred == Y) / float(Y.shape[0])
+    else:
+      raise RuntimeError("method not understood")
+
 
     cum_losses = numpy.cumsum(losses - osvm.lam * np.sum(osvm.w * osvm.w) / 2.)
 
@@ -233,4 +309,4 @@ def main():
     pdb.set_trace()
 
 if __name__ == '__main__':
-  main()
+  pdbw.pdbwrap(main)()
