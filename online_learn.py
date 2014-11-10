@@ -1,10 +1,13 @@
+#!/usr/bin/env python
 import numpy as np
 import numpy, pdb
 import os,sys
 import matplotlib.pyplot as plt
 
 import convert_data_to_numpy as convert
+import sklearn.metrics
 
+import gtkutils.ml_util as mlu
 import gtkutils.pdbwrap as pdbw
 
 class online_learner(object):
@@ -20,7 +23,7 @@ class online_learner(object):
   def compute_single_loss(self, y_gt, y_p, x=None):
     return RuntimeError("not overridden")
 
-  def evaluate(self, X, Y):
+  def evaluate(self, X, Y, fit = True):
     n_samples = X.shape[0]
 
     Y_p = numpy.zeros_like(Y)
@@ -38,7 +41,8 @@ class online_learner(object):
       total_loss += loss
       losses[xi] = loss
       
-      self.fit(x, Y[xi])
+      if fit:
+        self.fit(x, Y[xi])
 
     return Y_p, losses
 
@@ -99,7 +103,7 @@ class online_svm(online_learner):
     self.t += 1
     return self.w
 
-  def evaluate(self, X, Y):
+  def evaluate(self, X, Y, **kwargs):
     inds = range(Y.shape[0])
     numpy.random.shuffle(inds)
     
@@ -107,7 +111,7 @@ class online_svm(online_learner):
     Y = Y[inds, :]
 
     X_norm = X / numpy.linalg.norm(X, axis = 1)[:, numpy.newaxis]
-    return super(online_svm, self).evaluate(X_norm, Y)
+    return super(online_svm, self).evaluate(X_norm, Y, **kwargs)
 
 class online_exponentiated_sq_loss(online_learner):
     def __init__(self, nbr_classes, feature_size, lam=1e-3, grad_scale=1.0):
@@ -144,7 +148,7 @@ class online_exponentiated_sq_loss(online_learner):
         y_one_hot[y] = 1
         return y_one_hot
 
-    def evaluate(self, X,Y):
+    def evaluate(self, X,Y, **kwargs):
         inds = range(Y.shape[0])
         np.random.shuffle(inds)
 
@@ -157,7 +161,7 @@ class online_exponentiated_sq_loss(online_learner):
         x_max += x_max == x_min
 
         X_norm = (X - x_min) / (x_max - x_min)
-        return super(online_exponentiated_sq_loss, self).evaluate(X_norm,Y)
+        return super(online_exponentiated_sq_loss, self).evaluate(X_norm,Y, **kwargs)
     
     
 
@@ -228,7 +232,7 @@ class online_multi_svm(online_learner):
         self.t += 1
         return self.w
 
-    def evaluate(self, X, Y):
+    def evaluate(self, X, Y, **kwargs):
         inds = range(Y.shape[0])
         numpy.random.shuffle(inds)
         
@@ -236,7 +240,7 @@ class online_multi_svm(online_learner):
         Y = Y[inds, :]
 
         X_norm = X / numpy.linalg.norm(X, axis = 1)[:, numpy.newaxis]
-        return super(online_multi_svm, self).evaluate(X_norm, Y)
+        return super(online_multi_svm, self).evaluate(X_norm, Y, **kwargs)
 
 
 def poly_kernel_func(x0, x1, kernel_params):
@@ -286,7 +290,7 @@ class online_kernel_svm(online_learner):
 
     #TODO shrink????
 
-  def evaluate(self, X, Y):
+  def evaluate(self, X, Y, **kwargs):
     inds = range(Y.shape[0])
     numpy.random.shuffle(inds)
     
@@ -294,19 +298,25 @@ class online_kernel_svm(online_learner):
     Y = Y[inds, :]
 
     # X_norm = X / numpy.linalg.norm(X, axis = 1)[:, numpy.newaxis]
-    return super(self.__class__, self).evaluate(X, Y)
+    return super(self.__class__, self).evaluate(X, Y, **kwargs)
 
 
 def main():
-    data_o = convert.dataset_oakland(numpy_fn = 'data/oakland_part3_am_rf.node_features.npz')
-    method = 'EG'
+    data_o = convert.dataset_oakland(numpy_fn = 'data/oakland_part3_am_rf.node_features.npz',
+                                     fn = 'data/oakland_part3_am_rf.node_features')
+
+    test_data_o = convert.dataset_oakland(numpy_fn = 'data/oakland_part3_an_rf.node_features.npz',
+                                          fn = 'data/oakland_part3_an_rf.node_features')
+    method = 'multi_svm'
 
     if method == 'svm':
 
         lam = 1e-4
-        osvm = online_svm(lam = lam, feature_size = data_o.features.shape[1])
+        learner = online_svm(lam = lam, feature_size = data_o.features.shape[1])
 
         wall_and_ground_inds = numpy.where(numpy.logical_or(data_o.facade_inds, data_o.ground_inds))[0]
+        test_wall_and_ground_inds = numpy.where(numpy.logical_or(test_data_o.facade_inds, 
+                                                                 test_data_o.ground_inds))[0]
 
         Y = data_o.labels[wall_and_ground_inds]
         X = data_o.features[wall_and_ground_inds, :]
@@ -314,7 +324,13 @@ def main():
         Y[Y == data_o.label_map['facade']] = -1
         Y[Y == data_o.label_map['ground']] = 1
 
-        ypred, losses = osvm.evaluate(X, Y)
+        Y_test = test_data_o.labels[test_wall_and_ground_inds]
+        X_test = test_data_o.features[test_wall_and_ground_inds, :]
+
+        Y_test[Y_test == test_data_o.label_map['facade']] = -1
+        Y_test[Y_test == test_data_o.label_map['ground']] = 1
+
+        ypred, losses = learner.evaluate(X, Y)
 
         classification = ypred > 0
         n_right = (classification == (Y > 0)).sum()
@@ -324,14 +340,17 @@ def main():
         
         lam = 4e-4
         if method == 'multi_svm':
-            osvm = online_multi_svm(lam=lam, nbr_classes=5, feature_size = data_o.features.shape[1])
+            learner = online_multi_svm(lam=lam, nbr_classes=5, feature_size = data_o.features.shape[1])
         else:
-            osvm = online_exponentiated_sq_loss(nbr_classes=5, feature_size = data_o.features.shape[1], lam=lam, grad_scale=1e-3)
+            learner = online_exponentiated_sq_loss(nbr_classes=5, feature_size = data_o.features.shape[1], lam=lam, grad_scale=1e-3)
 
         X = data_o.features
         Y = np.array([ [data_o.label2ind[l[0]]] for l in data_o.labels ])
 
-        ypred, losses = osvm.evaluate(X,Y)
+        X_test = test_data_o.features
+        Y_test = np.array([ [test_data_o.label2ind[l[0]]] for l in test_data_o.labels ])
+
+        ypred, losses = learner.evaluate(X,Y)
 
         n_right = np.sum(ypred == Y)
         accuracy = np.sum(ypred == Y) / float(Y.shape[0])
@@ -339,27 +358,46 @@ def main():
     elif method == 'kernel_svm':
         
         lam = 4e-4
-        osvm = online_kernel_svm(lam=lam, feature_size = data_o.features.shape[1])
+        learner = online_kernel_svm(lam=lam, feature_size = data_o.features.shape[1])
 
         X = data_o.features
         Y = np.array([ [data_o.label2ind[l[0]]] for l in data_o.labels ])
 
-        ypred, losses = osvm.evaluate(X,Y)
+        X_test = test_data_o.features
+        Y_test = np.array([ [test_data_o.label2ind[l[0]]] for l in test_data_o.labels ])
+
+
+        ypred, losses = learner.evaluate(X,Y)
 
         n_right = np.sum(ypred == Y)
         accuracy = np.sum(ypred == Y) / float(Y.shape[0])
     else:
       raise RuntimeError("method not understood")
 
-
-    cum_losses = numpy.cumsum(losses - osvm.lam * np.sum(osvm.w * osvm.w) / 2.)
+      
+    cum_losses = numpy.cumsum(losses - learner.lam * np.sum(learner.w * learner.w) / 2.)
 
     print "right, accuracy: {}, {}".format(n_right, accuracy)
-    print "w: {}".format(osvm.w)
+    
+    y_test_pred, y_test_losses = learner.evaluate(X_test, 
+                                                  Y_test,
+                                                  fit = False)
+    if method in ['svm']:
+      ypred = ypred > 0
+      ypred[ypred == 0] = -1
+
+      y_test_pred = y_test_pred > 0
+      y_test_pred[y_test_pred == 0] = -1
+
+    # print "w: {}".format(learner.w)
     plt.figure()
-    plt.plot(range(losses.shape[0]), (cum_losses) / osvm.t)
+    plt.plot(range(losses.shape[0]), (cum_losses) / learner.t)
     plt.show(block = False)
 
+    cm_train = mlu.confusion_matrix(Y, ypred)
+    cm_test = mlu.confusion_matrix(Y_test, y_test_pred)
+    print "{} training accuracy: {}".format(method, cm_train.overall_accuracy)
+    print "{} test accuracy: {}".format(method, cm_test.overall_accuracy)
 
 
     pdb.set_trace()
