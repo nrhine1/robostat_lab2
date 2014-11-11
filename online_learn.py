@@ -239,6 +239,9 @@ class online_multi_svm(online_learner):
         X = X[inds, :]
         Y = Y[inds, :]
 
+
+        assert((numpy.unique(Y) == numpy.array([-1, 1])).all())
+
         X_norm = X / numpy.linalg.norm(X, axis = 1)[:, numpy.newaxis]
         return super(online_multi_svm, self).evaluate(X_norm, Y, **kwargs)
 
@@ -300,7 +303,36 @@ class online_kernel_svm(online_learner):
     # X_norm = X / numpy.linalg.norm(X, axis = 1)[:, numpy.newaxis]
     return super(self.__class__, self).evaluate(X, Y, **kwargs)
 
+class bayesian_linear_regression(object):
+  def __init__(self, feature_size):
+    self.sigma_sq = 2.0
+    self.P = numpy.eye(feature_size)
 
+    self.mu = numpy.zeros((feature_size, 1))
+    self.J = numpy.dot(self.P, self.mu_t)
+
+  def predict(self, x):
+    f_x = numpy.dot(self.mu_t, x)
+    if f_x >= 0:
+      return 1
+    else:
+      return -1
+
+  def fit(self, x_t, y_t):
+    self.J += y_t * x_t / self.sigma_sq
+    self.P += numpy.outer(x_t, x_t) / self.sigma_sq
+
+    self.mu = numpy.dot(numpy.linalg.pinv(self.P), self.J)
+
+  def evaluate(self, X, Y, **kwargs):
+    inds = range(Y.shape[0])
+    numpy.random.shuffle(inds)
+    
+    X = X[inds, :]
+    Y = Y[inds, :]
+
+    return super(self.__class__, self).evaluate(X, Y, **kwargs)
+    
 def main():
     data_o = convert.dataset_oakland(numpy_fn = 'data/oakland_part3_am_rf.node_features.npz',
                                      fn = 'data/oakland_part3_am_rf.node_features')
@@ -371,6 +403,9 @@ def main():
 
         n_right = np.sum(ypred == Y)
         accuracy = np.sum(ypred == Y) / float(Y.shape[0])
+    elif method == 'blr':
+      # blr = bayesian_linear_regression(feature_size = data_o.features.shape[0])
+      
     else:
       raise RuntimeError("method not understood")
 
