@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import numpy as np
-import numpy, pdb
+import numpy, pdb, warnings
 import os,sys
 import matplotlib.pyplot as plt
 
@@ -372,6 +372,25 @@ def duplicate_data(X, Y, copy_list):
   Y = numpy.vstack(Y_l)
   return X, Y
 
+def add_random_features(X, dim = 13, scaling = .1):
+  rfs = scaling * numpy.random.randn(int(X.shape[0]), dim)
+  X = numpy.hstack((X, rfs))
+  return X
+
+def add_corrupted_features(X, sigma_scaling =.1):  
+  mean_feat = numpy.mean(X, axis = 0)
+  std_feat = numpy.std(X, axis = 0)
+  
+  noisy_X = numpy.zeros_like(X)
+  with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    for (xi, x) in enumerate(X):
+      noisy_X[xi, :] = numpy.random.multivariate_normal(x, sigma_scaling * numpy.eye(x.shape[0], dtype = numpy.int))
+
+  X = numpy.hstack((X, noisy_X))
+  return X
+                                       
+
 def main():
     data_o = convert.dataset_oakland(numpy_fn = 'data/oakland_part3_am_rf.node_features.npz',
                                      fn = 'data/oakland_part3_am_rf.node_features')
@@ -379,6 +398,11 @@ def main():
     test_data_o = convert.dataset_oakland(numpy_fn = 'data/oakland_part3_an_rf.node_features.npz',
                                           fn = 'data/oakland_part3_an_rf.node_features')
     method = 'EG'
+    random_features_dim = 0
+    corruption_sigma_scaling = 1
+    do_add_corrupted_features = False
+    do_copy = True
+    noise_dim = random_features_dim + (do_add_corrupted_features) * 13
 
     if method == 'svm':
 
@@ -411,20 +435,36 @@ def main():
         
         svm_lam = 4e-4
         eg_lam = 4e-4
+
         if method == 'multi_svm':
-          copy_list = [5, 10, 10, 0, 2]
+          copy_list = [0, 0, 0, 0, 0]
+          if do_copy:
+            copy_list = [7, 10, 10, 0, 2]
           learner = online_multi_svm(lam=svm_lam, nbr_classes=5, feature_size = data_o.features.shape[1])
         else:
-          copy_list = [5, 10, 10, 0, 2]
+          copy_list = [0, 0, 0, 0, 0]
+          if do_copy:
+            copy_list = [5, 30, 15, 0, 2]
           learner = online_exponentiated_sq_loss(nbr_classes=5, 
-                                                 feature_size = data_o.features.shape[1], 
+                                                 feature_size = data_o.features.shape[1] + noise_dim,
                                                  lam=eg_lam, 
                                                  grad_scale=1e-3)
 
         X = data_o.features
         Y = np.array([ [data_o.label2ind[l[0]]] for l in data_o.labels ])
-
         X_test = test_data_o.features
+
+        # if 0 it doesn't do anything
+        X = add_random_features(X, random_features_dim)
+        X_test = add_random_features(X_test, random_features_dim)
+
+        if do_add_corrupted_features:
+          X = add_corrupted_features(X, corruption_sigma_scaling)
+          X_test = add_corrupted_features(X_test, corruption_sigma_scaling)
+
+
+
+
         Y_test = np.array([ [test_data_o.label2ind[l[0]]] for l in test_data_o.labels ])
 
 # (Pdb) p cm_train.cm.sum(axis = 1) / float(cm_train.cm.sum())
@@ -491,6 +531,9 @@ def main():
 
     cm_train = mlu.confusion_matrix(Y, ypred)
     cm_test = mlu.confusion_matrix(Y_test, y_test_pred)
+    
+    print cm_train.summary_table(data_o.ind2class)
+    print cm_test.summary_table(test_data_o.ind2class)
 
     write_classification(test_data_o.points, y_test_pred, 'test_classification.txt')
     write_classification(data_o.points, ypred, 'training_classification.txt')

@@ -50,6 +50,7 @@ class dataset_oakland(object):
         self.label_map  = {'veg' : 1004, 'wire' : 1100, 'pole':  1103, 'ground' : 1200, 'facade' : 1400}
         self.label2ind = {1004:0, 1100:1, 1103:2, 1200:3, 1400:4}
         self.ind2label = [1004, 1100, 1103, 1200, 1400]
+        self.ind2class = dict({0 : 'veg', 1 : 'wire', 2 : 'pole', 3 : 'ground', 4 : 'facade'})
 
         for (label_type, val) in self.label_map.items():
             setattr(self, '{}_inds'.format(label_type), self.labels == val)
