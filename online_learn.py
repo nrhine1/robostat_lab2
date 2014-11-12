@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+import collections
+import copy
 import numpy as np
 import numpy, pdb
 import os,sys
@@ -254,39 +256,40 @@ class online_multi_svm(online_learner):
         y_p = y_p[ind_inv]
         return y_p, losses
 
-def poly_kernel_func(x0, x1, kernel_params):
-    return numpy.power((numpy.dot(x0, x1) + kernel_params['c']), kernel_params['d'])
+def get_kernel_func(kernel_type=None, H=1, params=None):
+    if kernel_type == 'poly':
+        if params is None:
+            params = {'c':1, 'd':2}
+        return lambda a,b,params=params: (np.dot(a,b) + params['c'])**params['d']
+    elif kernel_type == 'unif':
+        return lambda a,b,H=H: 0.5*(np.abs(a-b) <= H) / H
+    elif kernel_type == 'epane':
+        return lambda a,b,H=H: 0.75*(1 - ((a-b)/H)**2)*(np.abs(a-b) <= H)
+    elif kernel_type == 'dot':
+        return np.dot
+    else:
+        print "WARNING. not valid kernel; using dot product instead"
+        return np.dot
 
 class online_kernel_svm(online_learner):
-  def __init__(self, feature_size, lam, kernel_type = 'poly', kernel_params = {'c' : 1, 'd': 2, 'H' = 1}):
-    self.kernel_type = kernel_type
-    self.kernel_params = kernel_params
+  def __init__(self, feature_size, lam, max_nbr_pts=2000, kernel_func = np.dot): 
+    self.kernel_func = kernel_func
 
-    self.sample_weights = numpy.zeros((1,1))
-    self.samples = numpy.zeros((1, feature_size))
+    self.sample_weights = collections.deque([], max_nbr_pts)
+    self.samples = collections.deque([], max_nbr_pts)
 
     self.feature_size = feature_size
 
     self.lam = lam
     self.t = float(1)
 
-
-    if self.kernel_type == 'poly':
-      self.kernel_func = poly_kernel_func
-    elif self.kernel_type == 'unif':
-        self.kernel_func = lambda a,b,H=kernel_params['H'] : 0.5*(np.abs(a-b) <= H) / H
-    elif self.kernel_type == 'Epane':
-        self.kernel_func = lambda a,b,H=kernel_params['H'] : 0.75*(1 - ((a-b)/H)**2)*(np.abs(a-b) <= H)
-    else:
-      raise RuntimeError("unknown kernel: {}".format(kernel_type))
-      
   def compute_single_loss(self, y_gt, y_p, x=None):
     return 0
 
   def predict(self, x):
     s = 0
     for (sample_weight, sample) in zip(self.sample_weights, self.samples):
-      s += sample_weight * self.kernel_func(sample, x, self.kernel_params)
+      s += sample_weight * self.kernel_func(sample, x)
     return s
 
   def fit(self, x, y_gt, do_batch = True):
@@ -294,11 +297,14 @@ class online_kernel_svm(online_learner):
 
     eta = 1. / (self.lam * self.t)
     # self.sample_weights *= (1 - self.lam * eta)
-    self.sample_weights *= ( 1 - 1. /self.t)
+    weight_multiplier = 1 - 1. / self.t
+    sample_weights = copy.deepcopy(self.sample_weights)
+    for sw in sample_weights:
+        self.sample_weights.append(sw * weight_multiplier)
 
     if 1 - y_gt * f_x > 0:
-      self.samples = numpy.vstack((self.samples, x))
-      self.sample_weights = numpy.vstack((self.sample_weights, y_gt * eta))
+      self.samples.append(x)
+      self.sample_weights.append(y_gt * eta)
 
     self.t += 1
 
@@ -320,8 +326,8 @@ class online_kernel_svm(online_learner):
     # X_norm = X / numpy.linalg.norm(X, axis = 1)[:, numpy.newaxis]
 
 class online_multi_kernel_svm(online_learner):
-    def __init__(self, nbr_classes, feature_size, lam, kernel_type = 'poly', kernel_params={'c':1, 'd':2}):
-        self.svms = [online_kernel_svm(feature_size, lam, kernel_type, kernel_params)  for ci in range(nbr_classes)]
+    def __init__(self, nbr_classes, feature_size, lam, max_nbr_pts, kernel_func = np.dot):
+        self.svms = [online_kernel_svm(feature_size, lam, max_nbr_pts, kernel_func)  for ci in range(nbr_classes)]
 
     def compute_single_loss(self, y_gt, y_p, x=None):
         return 0
@@ -461,7 +467,9 @@ def main():
           copy_list = [5, 10, 10, 0, 2]
           learner = online_multi_kernel_svm(nbr_classes=5, 
                                             feature_size = data_o.features.shape[1], 
-                                            lam=ksvm_lam) 
+                                            lam=ksvm_lam,
+                                            max_nbr_pts = 2000,
+                                            kernel_func = get_kernel_func()) 
  
 
         X = data_o.features
