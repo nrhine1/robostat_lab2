@@ -468,7 +468,7 @@ def main():
           learner = online_multi_kernel_svm(nbr_classes=5, 
                                             feature_size = data_o.features.shape[1], 
                                             lam=ksvm_lam,
-                                            max_nbr_pts = 2000,
+                                            max_nbr_pts = 10000,
                                             kernel_func = get_kernel_func()) 
  
 
