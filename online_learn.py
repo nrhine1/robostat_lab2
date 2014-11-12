@@ -111,7 +111,12 @@ class online_svm(online_learner):
     Y = Y[inds, :]
 
     X_norm = X / numpy.linalg.norm(X, axis = 1)[:, numpy.newaxis]
-    return super(online_svm, self).evaluate(X_norm, Y, **kwargs)
+    y_p, losses =  super(online_svm, self).evaluate(X_norm, Y, **kwargs)
+    ind_inv = numpy.zeros_like(inds)
+    ind_inv[inds] = numpy.arange(0, Y.shape[0], 1)
+    y_p = y_p[ind_inv]
+    return y_p, losses
+
 
 class online_exponentiated_sq_loss(online_learner):
     def __init__(self, nbr_classes, feature_size, lam=1e-3, grad_scale=1.0):
@@ -161,8 +166,12 @@ class online_exponentiated_sq_loss(online_learner):
         x_max += x_max == x_min
 
         X_norm = (X - x_min) / (x_max - x_min)
-        return super(online_exponentiated_sq_loss, self).evaluate(X_norm,Y, **kwargs)
-    
+        y_p, losses =  super(self.__class__, self).evaluate(X_norm,Y, **kwargs)
+        ind_inv = numpy.zeros_like(inds)
+        ind_inv[inds] = numpy.arange(0, Y.shape[0], 1)
+        y_p = y_p[ind_inv]
+        return y_p, losses
+
     
 
 class online_multi_svm(online_learner):
@@ -239,12 +248,13 @@ class online_multi_svm(online_learner):
         X = X[inds, :]
         Y = Y[inds, :]
 
-
-        assert((numpy.unique(Y) == numpy.array([-1, 1])).all())
-
         X_norm = X / numpy.linalg.norm(X, axis = 1)[:, numpy.newaxis]
-        return super(online_multi_svm, self).evaluate(X_norm, Y, **kwargs)
-
+        y_p, losses = super(self.__class__, self).evaluate(X_norm, Y, **kwargs)
+        
+        ind_inv = numpy.zeros_like(inds)
+        ind_inv[inds] = numpy.arange(0, Y.shape[0], 1)
+        y_p = y_p[ind_inv]
+        return y_p, losses
 
 def poly_kernel_func(x0, x1, kernel_params):
     return numpy.power((numpy.dot(x0, x1) + kernel_params['c']), kernel_params['d'])
@@ -299,9 +309,15 @@ class online_kernel_svm(online_learner):
     
     X = X[inds, :]
     Y = Y[inds, :]
+    
+    y_p, losses = super(self.__class__, self).evaluate(X, Y, **kwargs)
+    ind_inv = numpy.zeros_like(inds)
+    ind_inv[inds] = numpy.arange(0, Y.shape[0], 1)
+    y_p = y_p[ind_inv]
+    return y_p, losses
 
     # X_norm = X / numpy.linalg.norm(X, axis = 1)[:, numpy.newaxis]
-    return super(self.__class__, self).evaluate(X, Y, **kwargs)
+
 
 class bayesian_linear_regression(object):
   def __init__(self, feature_size):
@@ -333,13 +349,36 @@ class bayesian_linear_regression(object):
 
     return super(self.__class__, self).evaluate(X, Y, **kwargs)
     
+def duplicate_data(X, Y, copy_list):
+  def copy_data(X, Y, n_copies, label_idx):
+    data_inds = list(numpy.arange(0, Y.shape[0], 1)[(Y == label_idx).ravel()])
+    data_inds = numpy.hstack(n_copies * data_inds)
+    X_new = X[data_inds, :]
+    Y_new = Y[data_inds, :]
+    return X_new, Y_new
+
+  X_l = [X]
+  Y_l = [Y]
+
+  for (i, c) in enumerate(copy_list):
+    if c <= 0:
+      continue
+
+    xn, yn = copy_data(X, Y, c, i)
+    X_l.append(xn)
+    Y_l.append(yn)
+
+  X = numpy.vstack(X_l)
+  Y = numpy.vstack(Y_l)
+  return X, Y
+
 def main():
     data_o = convert.dataset_oakland(numpy_fn = 'data/oakland_part3_am_rf.node_features.npz',
                                      fn = 'data/oakland_part3_am_rf.node_features')
 
     test_data_o = convert.dataset_oakland(numpy_fn = 'data/oakland_part3_an_rf.node_features.npz',
                                           fn = 'data/oakland_part3_an_rf.node_features')
-    method = 'multi_svm'
+    method = 'EG'
 
     if method == 'svm':
 
@@ -370,11 +409,17 @@ def main():
 
     elif method == 'multi_svm' or method == 'EG':
         
-        lam = 4e-4
+        svm_lam = 4e-4
+        eg_lam = 4e-4
         if method == 'multi_svm':
-            learner = online_multi_svm(lam=lam, nbr_classes=5, feature_size = data_o.features.shape[1])
+          copy_list = [5, 10, 10, 0, 2]
+          learner = online_multi_svm(lam=svm_lam, nbr_classes=5, feature_size = data_o.features.shape[1])
         else:
-            learner = online_exponentiated_sq_loss(nbr_classes=5, feature_size = data_o.features.shape[1], lam=lam, grad_scale=1e-3)
+          copy_list = [5, 10, 10, 0, 2]
+          learner = online_exponentiated_sq_loss(nbr_classes=5, 
+                                                 feature_size = data_o.features.shape[1], 
+                                                 lam=eg_lam, 
+                                                 grad_scale=1e-3)
 
         X = data_o.features
         Y = np.array([ [data_o.label2ind[l[0]]] for l in data_o.labels ])
@@ -382,8 +427,23 @@ def main():
         X_test = test_data_o.features
         Y_test = np.array([ [test_data_o.label2ind[l[0]]] for l in test_data_o.labels ])
 
-        ypred, losses = learner.evaluate(X,Y)
+# (Pdb) p cm_train.cm.sum(axis = 1) / float(cm_train.cm.sum())
+# array([ 0.08823529,  0.02601892,  0.04545358,  0.71208491,  0.1282073 ])
+# (Pdb) p cm_test.cm.sum(axis = 1) / float(cm_test.cm.sum())
+# array([ 0.38835618,  0.06563728,  0.02983762,  0.38698244,  0.12918647])
 
+
+        # 0 vegetation 34 139 87
+        # 1 wire 135 206 235
+        # 2 pole 0 0 205
+        # 3 ground 210 105 30
+        # 4 facade 128 0 127
+
+
+        
+        X,Y = duplicate_data(X, Y, copy_list)
+        ypred, losses = learner.evaluate(X,Y)
+          
         n_right = np.sum(ypred == Y)
         accuracy = np.sum(ypred == Y) / float(Y.shape[0])
 
@@ -405,7 +465,7 @@ def main():
         accuracy = np.sum(ypred == Y) / float(Y.shape[0])
     elif method == 'blr':
       # blr = bayesian_linear_regression(feature_size = data_o.features.shape[0])
-      
+      raise RuntimeError("nope")
     else:
       raise RuntimeError("method not understood")
 
@@ -431,11 +491,20 @@ def main():
 
     cm_train = mlu.confusion_matrix(Y, ypred)
     cm_test = mlu.confusion_matrix(Y_test, y_test_pred)
+
+    write_classification(test_data_o.points, y_test_pred, 'test_classification.txt')
+    write_classification(data_o.points, ypred, 'training_classification.txt')
     print "{} training accuracy: {}".format(method, cm_train.overall_accuracy)
     print "{} test accuracy: {}".format(method, cm_test.overall_accuracy)
 
 
     pdb.set_trace()
+
+def write_classification(X_points, Y_pred, fn = 'blah.txt'):
+  with open(fn, 'w') as f:
+    for (point, y_pred) in zip(X_points, Y_pred):
+      f.write('{:.3f} {:.3f} {:.3f} {}\n'.format(point[0], point[1], point[2], y_pred[0]))
+    
 
 if __name__ == '__main__':
   pdbw.pdbwrap(main)()
