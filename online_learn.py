@@ -212,8 +212,6 @@ class online_multi_svm(online_learner):
         
     def compute_single_loss(self, y_gt, y_p, x):
         return max(0, 1 - self.compute_margin(y_gt, x)) + self.lam * np.sum(self.w * self.w) / 2.0
-        
-      
 
     def fit(self, x, y_gt, do_batch = True):
         alpha = 1.0 / (self.lam * self.t)
@@ -260,7 +258,7 @@ def poly_kernel_func(x0, x1, kernel_params):
     return numpy.power((numpy.dot(x0, x1) + kernel_params['c']), kernel_params['d'])
 
 class online_kernel_svm(online_learner):
-  def __init__(self, feature_size, lam, kernel_type = 'poly', kernel_params = {'c' : 1, 'd': 2}):
+  def __init__(self, feature_size, lam, kernel_type = 'poly', kernel_params = {'c' : 1, 'd': 2, 'H' = 1}):
     self.kernel_type = kernel_type
     self.kernel_params = kernel_params
 
@@ -273,9 +271,12 @@ class online_kernel_svm(online_learner):
     self.t = float(1)
 
 
-
     if self.kernel_type == 'poly':
       self.kernel_func = poly_kernel_func
+    elif self.kernel_type == 'unif':
+        self.kernel_func = lambda a,b,H=kernel_params['H'] : 0.5*(np.abs(a-b) <= H) / H
+    elif self.kernel_type == 'Epane':
+        self.kernel_func = lambda a,b,H=kernel_params['H'] : 0.75*(1 - ((a-b)/H)**2)*(np.abs(a-b) <= H)
     else:
       raise RuntimeError("unknown kernel: {}".format(kernel_type))
       
@@ -317,6 +318,41 @@ class online_kernel_svm(online_learner):
     return y_p, losses
 
     # X_norm = X / numpy.linalg.norm(X, axis = 1)[:, numpy.newaxis]
+
+class online_multi_kernel_svm(online_learner):
+    def __init__(self, nbr_classes, feature_size, lam, kernel_type = 'poly', kernel_params={'c':1, 'd':2}):
+        self.svms = [online_kernel_svm(feature_size, lam, kernel_type, kernel_params)  for ci in range(nbr_classes)]
+
+    def compute_single_loss(self, y_gt, y_p, x=None):
+        return 0
+
+    def predict(self, x):
+        scores = [ svm.predict(x) for svm in self.svms ]
+        return np.argmax(scores)
+
+    def fit(self, x, y_gt, do_batch=True):
+        scores = [ svm.predict(x) for svm in self.svms ]
+        for si, svm in enumerate(self.svms):
+            if si != y_gt:
+                svm.fit(x, -1, do_batch)
+            else:
+                svm.fit(x, 1,do_batch)
+        return 0
+
+    def evaluate(self, X, Y, **kwargs):
+        inds = range(Y.shape[0])
+        numpy.random.shuffle(inds)
+        
+        X = X[inds, :]
+        Y = Y[inds, :]
+
+        X_norm = X / numpy.linalg.norm(X, axis = 1)[:, numpy.newaxis]
+        y_p, losses = super(self.__class__, self).evaluate(X_norm, Y, **kwargs)
+        
+        ind_inv = numpy.zeros_like(inds)
+        ind_inv[inds] = numpy.arange(0, Y.shape[0], 1)
+        y_p = y_p[ind_inv]
+        return y_p, losses
 
 
 class bayesian_linear_regression(object):
@@ -378,7 +414,7 @@ def main():
 
     test_data_o = convert.dataset_oakland(numpy_fn = 'data/oakland_part3_an_rf.node_features.npz',
                                           fn = 'data/oakland_part3_an_rf.node_features')
-    method = 'EG'
+    method = 'multi_ksvm'
 
     if method == 'svm':
 
@@ -407,19 +443,26 @@ def main():
         n_right = (classification == (Y > 0)).sum()
         accuracy = n_right / float(Y.shape[0])
 
-    elif method == 'multi_svm' or method == 'EG':
+    elif method == 'multi_svm' or method == 'EG' or method == 'multi_ksvm':
         
         svm_lam = 4e-4
         eg_lam = 4e-4
+        ksvm_lam = 4e-4
         if method == 'multi_svm':
           copy_list = [5, 10, 10, 0, 2]
           learner = online_multi_svm(lam=svm_lam, nbr_classes=5, feature_size = data_o.features.shape[1])
-        else:
+        elif method == 'EG':
           copy_list = [5, 10, 10, 0, 2]
           learner = online_exponentiated_sq_loss(nbr_classes=5, 
                                                  feature_size = data_o.features.shape[1], 
                                                  lam=eg_lam, 
                                                  grad_scale=1e-3)
+        elif method == 'multi_ksvm':
+          copy_list = [5, 10, 10, 0, 2]
+          learner = online_multi_kernel_svm(nbr_classes=5, 
+                                            feature_size = data_o.features.shape[1], 
+                                            lam=ksvm_lam) 
+ 
 
         X = data_o.features
         Y = np.array([ [data_o.label2ind[l[0]]] for l in data_o.labels ])
