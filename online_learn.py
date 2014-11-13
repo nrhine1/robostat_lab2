@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import svm_io
 import collections
 import copy
 import numpy as np
@@ -625,7 +626,8 @@ def main(method = 'EG',
         X,Y = duplicate_data(X, Y, copy_list)
 
         # prediction/learning 
-        ypred, losses = learner.evaluate(X,Y,**kwargs)
+        ypred = Y
+        #ypred, losses = learner.evaluate(X,Y,**kwargs)
           
         n_right = np.sum(ypred == Y)
         accuracy = np.sum(ypred == Y) / float(Y.shape[0])
@@ -655,7 +657,10 @@ def main(method = 'EG',
     # cum_losses = numpy.cumsum(losses - learner.lam * np.sum(learner.w * learner.w) / 2.)
 
     # print "right, accuracy: {}, {}".format(n_right, accuracy)
+
+    learner = svm_io.load_ksvm()
     
+    print "testing"
     y_test_pred, y_test_losses = learner.evaluate(X_test, 
                                                   Y_test,
                                                   fit = False,
