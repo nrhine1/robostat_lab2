@@ -347,6 +347,7 @@ class online_kernel_svm(online_learner):
 
 class online_multi_kernel_svm(online_learner):
     def __init__(self, nbr_classes, feature_size, lam, max_nbr_pts, kernel_func = np.dot):
+        self.lam = lam
         self.svms = [online_kernel_svm(feature_size, lam, max_nbr_pts, kernel_func)  for ci in range(nbr_classes)]
 
     def compute_single_loss(self, y_gt, y_p, x=None):
@@ -547,7 +548,7 @@ def main():
           learner = online_multi_kernel_svm(nbr_classes=5, 
                                             feature_size = data_o.features.shape[1], 
                                             lam=ksvm_lam,
-                                            max_nbr_pts = 10000,
+                                            max_nbr_pts = 5000,
                                             kernel_func = get_kernel_func(kernel_type='unif', H=H)) 
 
         # data duplication
@@ -582,7 +583,10 @@ def main():
       raise RuntimeError("method not understood")
 
       
-    cum_losses = numpy.cumsum(losses - learner.lam * np.sum(learner.w * learner.w) / 2.)
+    if method != 'multi_ksvm':
+        cum_losses = numpy.cumsum(losses - learner.lam * np.sum(learner.w * learner.w) / 2.)
+    else:
+        cum_losses = numpy.cumsum(losses)
 
     print "right, accuracy: {}, {}".format(n_right, accuracy)
     
