@@ -453,15 +453,17 @@ def add_corrupted_features(X, sigma_scaling =.1):
   X = numpy.hstack((X, noisy_X))
   return X
                                        
-
 @argh.arg('--method', choices = ['EG', 'multi_svm', 'multi_ksvm'], required = True)
+@argh.arg('--kernel-type', choices = ['unif', 'poly', 'epane', 'dot'])
 @argh.set_all_toggleable()
 def main(method = 'EG',
          do_copy = True,
          random_features_dim = 0,
          random_features_scaling = 1.0,
          do_add_corrupted_features = False,
-         corruption_sigma_scaling = 1.0):
+         corruption_sigma_scaling = 1.0,
+         kernel_type = 'unif',
+         max_nbr_points = 10000):
     data_o = convert.dataset_oakland(numpy_fn = 'data/oakland_part3_am_rf.node_features.npz',
                                      fn = 'data/oakland_part3_am_rf.node_features')
 
@@ -469,6 +471,7 @@ def main(method = 'EG',
                                           fn = 'data/oakland_part3_an_rf.node_features')
     copy_list = [0, 0, 0, 0, 0]
     compute_kernel_width = True
+    class_weights = None
 
     #noise
     noise_dim = random_features_dim + (do_add_corrupted_features) * 13
@@ -540,7 +543,7 @@ def main(method = 'EG',
                                      feature_size = data_o.features.shape[1] + noise_dim)
         elif method == 'EG':
           if do_copy:
-              copy_list = [5, 10, 10, 0, 2]
+              copy_list = [5, 50, 12, 0, 2]
           learner = online_exponentiated_sq_loss(nbr_classes=5, 
                                                  feature_size = data_o.features.shape[1] + noise_dim,
                                                  lam=eg_lam, 
@@ -551,8 +554,8 @@ def main(method = 'EG',
           learner = online_multi_kernel_svm(nbr_classes=5, 
                                             feature_size = data_o.features.shape[1] + noise_dim, 
                                             lam=ksvm_lam,
-                                            max_nbr_pts = 10000,
-                                            kernel_func = get_kernel_func(kernel_type='unif', H=H)) 
+                                            max_nbr_pts = max_nbr_points,
+                                            kernel_func = get_kernel_func(kernel_type=kernel_type, H=H)) 
 
         # data duplication
         X,Y = duplicate_data(X, Y, copy_list)
@@ -592,7 +595,8 @@ def main(method = 'EG',
     
     y_test_pred, y_test_losses = learner.evaluate(X_test, 
                                                   Y_test,
-                                                  fit = False)
+                                                  fit = False,
+                                                  class_weights = class_weights)
     if method in ['svm']:
       ypred = ypred > 0
       ypred[ypred == 0] = -1
