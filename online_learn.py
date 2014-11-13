@@ -19,13 +19,13 @@ class online_learner(object):
   def predict(self, x):
     return RuntimeError("not overridden")
 
-  def fit(self, x, y, t):
+  def fit(self, x, y):
     return RuntimeError("not overridden")
 
   def compute_single_loss(self, y_gt, y_p, x=None):
     return RuntimeError("not overridden")
 
-  def evaluate(self, X, Y, fit = True):
+  def evaluate(self, X, Y, fit = True, class_weights=None):
     n_samples = X.shape[0]
 
     Y_p = numpy.zeros_like(Y)
@@ -37,14 +37,22 @@ class online_learner(object):
         print "round ", xi, total_loss
 
       y_p = self.predict(x)
-      Y_p[xi] = y_p
+      if class_weights is None:
+          #TODO change all predictions (none kernelized versions esp.) to return vector of weights instead 
+          # of classification
+          Y_p[xi] = y_p
+      else:
+          Y_p[xi] = np.argmax(y_p)
 
       loss = self.compute_single_loss(Y[xi], y_p, x)
       total_loss += loss
       losses[xi] = loss
       
       if fit:
-        self.fit(x, Y[xi])
+        if class_weights is None:
+          self.fit(x, Y[xi])
+        else:
+          self.fit(x, Y[xi], weight=class_weights[Y[xi]], y_p=y_p)
 
     return Y_p, losses
 
@@ -262,9 +270,9 @@ def get_kernel_func(kernel_type=None, H=1, params=None):
             params = {'c':1, 'd':2}
         return lambda a,b,params=params: (np.dot(a,b) + params['c'])**params['d']
     elif kernel_type == 'unif':
-        return lambda a,b,H=H: 0.5*(np.abs(a-b) <= H) / H
+        return lambda a,b,H=H: 0.5*( np.linalg.norm(a-b) <= H) / H
     elif kernel_type == 'epane':
-        return lambda a,b,H=H: 0.75*(1 - ((a-b)/H)**2)*(np.abs(a-b) <= H)
+        return lambda a,b,H=H: max(0.75*(1 - (np.linalg.norm(a-b)/H)**2), 0)
     elif kernel_type == 'dot':
         return np.dot
     else:
@@ -275,7 +283,11 @@ class online_kernel_svm(online_learner):
   def __init__(self, feature_size, lam, max_nbr_pts=2000, kernel_func = np.dot): 
     self.kernel_func = kernel_func
 
-    self.sample_weights = collections.deque([], max_nbr_pts)
+    #self.sample_weights = collections.deque([], max_nbr_pts)
+    self.sw_f = 0
+    self.sw_r = 0
+    self.sw_max_len = max_nbr_pts
+    self.sample_weights = np.zeros(max_nbr_pts, dtype=np.float64)
     self.samples = collections.deque([], max_nbr_pts)
 
     self.feature_size = feature_size
@@ -288,23 +300,31 @@ class online_kernel_svm(online_learner):
 
   def predict(self, x):
     s = 0
-    for (sample_weight, sample) in zip(self.sample_weights, self.samples):
-      s += sample_weight * self.kernel_func(sample, x)
+    #for (sample_weight, sample) in zip(self.sample_weights, self.samples):
+    #  s += sample_weight * self.kernel_func(sample, x)
+    for (si, sample) in enumerate(self.samples):
+        s += self.sample_weights[ (self.sw_f+si) % self.sw_max_len ] * self.kernel_func(sample, x)
     return s
 
-  def fit(self, x, y_gt, do_batch = True):
-    f_x = self.predict(x)
-
+  def fit(self, x, y_gt, do_batch = True, weight=1, y_p=None):
+    if y_p is None:
+        y_p = self.predict(x)
     eta = 1. / (self.lam * self.t)
     # self.sample_weights *= (1 - self.lam * eta)
     weight_multiplier = 1 - 1. / self.t
-    sample_weights = copy.deepcopy(self.sample_weights)
-    for sw in sample_weights:
-        self.sample_weights.append(sw * weight_multiplier)
+#    sample_weights = copy.deepcopy(self.sample_weights)
+#    for sw in sample_weights:
+#        self.sample_weights.append(sw * weight_multiplier)
+    self.sample_weights *= weight_multiplier
 
-    if 1 - y_gt * f_x > 0:
+    if 1 - y_gt * y_p > 0:
       self.samples.append(x)
-      self.sample_weights.append(y_gt * eta)
+#      self.sample_weights.append(y_gt * eta * weight)
+      self.sample_weights[self.sw_r] = y_gt * eta * weight
+      self.sw_r = (self.sw_r + 1) % self.sw_max_len
+      if self.sw_r == self.sw_f:
+          self.sw_f = (self.sw_f + 1) % self.sw_max_len
+      
 
     self.t += 1
 
@@ -333,16 +353,16 @@ class online_multi_kernel_svm(online_learner):
         return 0
 
     def predict(self, x):
-        scores = [ svm.predict(x) for svm in self.svms ]
-        return np.argmax(scores)
+        return [ svm.predict(x) for svm in self.svms ]
 
-    def fit(self, x, y_gt, do_batch=True):
-        scores = [ svm.predict(x) for svm in self.svms ]
+    def fit(self, x, y_gt, do_batch=True,weight=1.0, y_p=None):
+        if y_p is None:
+            y_p = [ svm.predict(x) for svm in self.svms ]
         for si, svm in enumerate(self.svms):
             if si != y_gt:
-                svm.fit(x, -1, do_batch)
+                svm.fit(x, -1, do_batch=do_batch, weight=weight, y_p=y_p[si])
             else:
-                svm.fit(x, 1,do_batch)
+                svm.fit(x, 1,do_batch=do_batch, weight=weight, y_p=y_p[si])
         return 0
 
     def evaluate(self, X, Y, **kwargs):
@@ -439,12 +459,14 @@ def main():
 
     test_data_o = convert.dataset_oakland(numpy_fn = 'data/oakland_part3_an_rf.node_features.npz',
                                           fn = 'data/oakland_part3_an_rf.node_features')
-    method = 'EG'
+    method = 'multi_ksvm'
     random_features_dim = 0
     corruption_sigma_scaling = 1
     do_add_corrupted_features = False
     do_copy = True
+    copy_list = [0, 0, 0, 0, 0]
     noise_dim = random_features_dim + (do_add_corrupted_features) * 13
+    compute_kernel_width = True
 
 
 
@@ -476,32 +498,6 @@ def main():
         accuracy = n_right / float(Y.shape[0])
 
     elif method == 'multi_svm' or method == 'EG' or method == 'multi_ksvm':
-        
-        svm_lam = 4e-4
-        eg_lam = 4e-4
-
-        ksvm_lam = 4e-4
-
-        if method == 'multi_svm':
-          copy_list = [0, 0, 0, 0, 0]
-          if do_copy:
-            copy_list = [7, 10, 10, 0, 2]
-          learner = online_multi_svm(lam=svm_lam, nbr_classes=5, feature_size = data_o.features.shape[1])
-        elif method == 'EG':
-          copy_list = [5, 10, 10, 0, 2]
-          learner = online_exponentiated_sq_loss(nbr_classes=5, 
-                                                 feature_size = data_o.features.shape[1] + noise_dim,
-                                                 lam=eg_lam, 
-                                                 grad_scale=1e-3)
-        elif method == 'multi_ksvm':
-          copy_list = [5, 10, 10, 0, 2]
-          learner = online_multi_kernel_svm(nbr_classes=5, 
-                                            feature_size = data_o.features.shape[1], 
-                                            lam=ksvm_lam,
-                                            max_nbr_pts = 10000,
-                                            kernel_func = get_kernel_func()) 
- 
-
         X = data_o.features
         Y = np.array([ [data_o.label2ind[l[0]]] for l in data_o.labels ])
         X_test = test_data_o.features
@@ -514,27 +510,51 @@ def main():
           X = add_corrupted_features(X, corruption_sigma_scaling)
           X_test = add_corrupted_features(X_test, corruption_sigma_scaling)
 
-
-
-
         Y_test = np.array([ [test_data_o.label2ind[l[0]]] for l in test_data_o.labels ])
 
-# (Pdb) p cm_train.cm.sum(axis = 1) / float(cm_train.cm.sum())
-# array([ 0.08823529,  0.02601892,  0.04545358,  0.71208491,  0.1282073 ])
-# (Pdb) p cm_test.cm.sum(axis = 1) / float(cm_test.cm.sum())
-# array([ 0.38835618,  0.06563728,  0.02983762,  0.38698244,  0.12918647])
+        # compute kernel width
+        H=1.02723450351
+        if compute_kernel_width:
+            n_samples = 200000
+            dists = np.zeros((n_samples,))
+            for rand_pi in range(n_samples):
+                rand_p = np.asarray(np.random.uniform(0, 1-1e-9, (2,)) * X.shape[0], dtype=int)
+                dists[rand_pi] = np.linalg.norm(X[rand_p[0],:] - X[rand_p[1],:])
 
-
-        # 0 vegetation 34 139 87
-        # 1 wire 135 206 235
-        # 2 pole 0 0 205
-        # 3 ground 210 105 30
-        # 4 facade 128 0 127
-
+            H = np.sort(dists)[int(n_samples / 2)]
 
         
+        # classifier set up
+        svm_lam = 4e-4
+        eg_lam = 4e-4
+        ksvm_lam = 4e-4
+        kwargs = {}
+
+        if method == 'multi_svm':
+          if do_copy:
+            copy_list = [7, 10, 10, 0, 2]
+          learner = online_multi_svm(lam=svm_lam, nbr_classes=5, feature_size = data_o.features.shape[1])
+        elif method == 'EG':
+          if do_copy:
+              copy_list = [5, 10, 10, 0, 2]
+          learner = online_exponentiated_sq_loss(nbr_classes=5, 
+                                                 feature_size = data_o.features.shape[1] + noise_dim,
+                                                 lam=eg_lam, 
+                                                 grad_scale=1e-3)
+        elif method == 'multi_ksvm':
+          class_weights = np.array([5, 10, 10, 0, 2]) + 1.0
+          kwargs = {'class_weights' : class_weights}
+          learner = online_multi_kernel_svm(nbr_classes=5, 
+                                            feature_size = data_o.features.shape[1], 
+                                            lam=ksvm_lam,
+                                            max_nbr_pts = 10000,
+                                            kernel_func = get_kernel_func(kernel_type='unif', H=H)) 
+
+        # data duplication
         X,Y = duplicate_data(X, Y, copy_list)
-        ypred, losses = learner.evaluate(X,Y)
+
+        # prediction/learning 
+        ypred, losses = learner.evaluate(X,Y,**kwargs)
           
         n_right = np.sum(ypred == Y)
         accuracy = np.sum(ypred == Y) / float(Y.shape[0])
