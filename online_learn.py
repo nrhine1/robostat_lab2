@@ -608,7 +608,7 @@ def main(method = 'EG',
                                      feature_size = data_o.features.shape[1] + noise_dim)
         elif method == 'EG':
           if do_copy:
-              copy_list = [5, 50, 12, 0, 2]
+              copy_list = [5, 10, 12, 0, 2]
           learner = online_exponentiated_sq_loss(nbr_classes=5, 
                                                  feature_size = data_o.features.shape[1] + noise_dim,
                                                  lam=eg_lam, 
@@ -626,8 +626,8 @@ def main(method = 'EG',
         X,Y = duplicate_data(X, Y, copy_list)
 
         # prediction/learning 
-        ypred = Y
-        #ypred, losses = learner.evaluate(X,Y,**kwargs)
+        # ypred = Y
+        ypred, losses = learner.evaluate(X,Y,**kwargs)
           
         n_right = np.sum(ypred == Y)
         accuracy = np.sum(ypred == Y) / float(Y.shape[0])
@@ -658,7 +658,7 @@ def main(method = 'EG',
 
     # print "right, accuracy: {}, {}".format(n_right, accuracy)
 
-    learner = svm_io.load_ksvm()
+    # learner = svm_io.load_ksvm()
     
     print "testing"
     y_test_pred, y_test_losses = learner.evaluate(X_test, 
