@@ -12,7 +12,7 @@ import sklearn.metrics
 
 import gtkutils.ml_util as mlu
 import gtkutils.pdbwrap as pdbw
-
+nsvs = 0
 class online_learner(object):
   def __init__(self):
     pass
@@ -280,6 +280,71 @@ def get_kernel_func(kernel_type=None, H=1, params=None):
         print "WARNING. not valid kernel; using dot product instead"
         return np.dot
 
+
+# class online_kernel_svm2(online_learner):
+#   def __init__(self, feature_size, lam, max_nbr_pts=2000, kernel_func = np.dot): 
+#     self.kernel_func = kernel_func
+
+#     #self.sample_weights = collections.deque([], max_nbr_pts)
+#     self.sw_max_len = max_nbr_pts
+#     self.sample_weights = np.zeros(max_nbr_pts, dtype=np.float64)
+#     self.samples = numpy.zeros((max_nbr_pts, feature_size), dtype = numpy.float64)
+
+#     self.feature_size = feature_size
+
+#     self.lam = lam
+#     self.t = float(1)
+
+#   def compute_single_loss(self, y_gt, y_p, x=None):
+#     return 0
+
+#   def predict(self, x):
+#     s = 0
+#     for (sample_weight, sample) in zip(self.sample_weights, self.samples):
+#      s += sample_weight * self.kernel_func(sample, x)
+
+#     # for (si, sample) in enumerate(self.samples):
+#     #     s += self.sample_weights[ (self.sw_f+si) % self.sw_max_len ] * self.kernel_func(sample, x)
+#     return s
+
+#   def fit(self, x, y_gt, do_batch = True, weight=1, y_p=None):
+#     if y_p is None:
+#         y_p = self.predict(x)
+#     eta = 1. / (self.lam * self.t)
+#     # self.sample_weights *= (1 - self.lam * eta)
+#     weight_multiplier = 1 - 1. / self.t
+# #    sample_weights = copy.deepcopy(self.sample_weights)
+# #    for sw in sample_weights:
+# #        self.sample_weights.append(sw * weight_multiplier)
+#     self.sample_weights *= weight_multiplier
+
+#     if 1 - y_gt * y_p > 0:
+#       # self.samples.append(x)
+#       min_idx = numpy.argmin(numpy.abs(self.sample_weights))
+#       min_val = self.sample_weights[min_idx]
+#       proposed_new_weight =  y_gt * eta * weight
+#       if abs(min_val) < abs(proposed_new_weight):
+#         self.sample_weights[min_idx] = proposed_new_weight
+#         self.samples[min_idx, :] = x
+#       nsvs += 1
+
+#     self.t += 1
+
+#     #TODO shrink????
+
+#   def evaluate(self, X, Y, **kwargs):
+#     inds = range(Y.shape[0])
+#     numpy.random.shuffle(inds)
+    
+#     X = X[inds, :]
+#     Y = Y[inds, :]
+    
+#     y_p, losses = super(self.__class__, self).evaluate(X, Y, **kwargs)
+#     ind_inv = numpy.zeros_like(inds)
+#     ind_inv[inds] = numpy.arange(0, Y.shape[0], 1)
+#     y_p = y_p[ind_inv]
+#     return y_p, losses
+
 class online_kernel_svm(online_learner):
   def __init__(self, feature_size, lam, max_nbr_pts=2000, kernel_func = np.dot): 
     self.kernel_func = kernel_func
@@ -325,11 +390,7 @@ class online_kernel_svm(online_learner):
       self.sw_r = (self.sw_r + 1) % self.sw_max_len
       if self.sw_r == self.sw_f:
           self.sw_f = (self.sw_f + 1) % self.sw_max_len
-      
-
     self.t += 1
-
-    #TODO shrink????
 
   def evaluate(self, X, Y, **kwargs):
     inds = range(Y.shape[0])
@@ -358,14 +419,15 @@ class online_multi_kernel_svm(online_learner):
         return [ svm.predict(x) for svm in self.svms ]
 
     def fit(self, x, y_gt, do_batch=True,weight=1.0, y_p=None):
-        if y_p is None:
-            y_p = [ svm.predict(x) for svm in self.svms ]
-        for si, svm in enumerate(self.svms):
-            if si != y_gt:
-                svm.fit(x, -1, do_batch=do_batch, weight=weight, y_p=y_p[si])
-            else:
-                svm.fit(x, 1,do_batch=do_batch, weight=weight, y_p=y_p[si])
-        return 0
+      if y_p is None:
+        y_p = [ svm.predict(x) for svm in self.svms ]
+      for si, svm in enumerate(self.svms):
+        if si != y_gt:
+          svm.fit(x, -1, do_batch=do_batch, weight=weight, y_p=y_p[si])
+        else:
+          svm.fit(x, 1,do_batch=do_batch, weight=weight, y_p=y_p[si])
+          
+      return 0
 
     def evaluate(self, X, Y, **kwargs):
         inds = range(Y.shape[0])
@@ -383,35 +445,35 @@ class online_multi_kernel_svm(online_learner):
         return y_p, losses
 
 
-class bayesian_linear_regression(object):
-  def __init__(self, feature_size):
-    self.sigma_sq = 2.0
-    self.P = numpy.eye(feature_size)
+# class bayesian_linear_regression(object):
+#   def __init__(self, feature_size):
+#     self.sigma_sq = 2.0
+#     self.P = numpy.eye(feature_size)
 
-    self.mu = numpy.zeros((feature_size, 1))
-    self.J = numpy.dot(self.P, self.mu_t)
+#     self.mu = numpy.zeros((feature_size, 1))
+#     self.J = numpy.dot(self.P, self.mu_t)
 
-  def predict(self, x):
-    f_x = numpy.dot(self.mu_t, x)
-    if f_x >= 0:
-      return 1
-    else:
-      return -1
+#   def predict(self, x):
+#     f_x = numpy.dot(self.mu_t, x)
+#     if f_x >= 0:
+#       return 1
+#     else:
+#       return -1
 
-  def fit(self, x_t, y_t):
-    self.J += y_t * x_t / self.sigma_sq
-    self.P += numpy.outer(x_t, x_t) / self.sigma_sq
+#   def fit(self, x_t, y_t):
+#     self.J += y_t * x_t / self.sigma_sq
+#     self.P += numpy.outer(x_t, x_t) / self.sigma_sq
 
-    self.mu = numpy.dot(numpy.linalg.pinv(self.P), self.J)
+#     self.mu = numpy.dot(numpy.linalg.pinv(self.P), self.J)
 
-  def evaluate(self, X, Y, **kwargs):
-    inds = range(Y.shape[0])
-    numpy.random.shuffle(inds)
+#   def evaluate(self, X, Y, **kwargs):
+#     inds = range(Y.shape[0])
+#     numpy.random.shuffle(inds)
     
-    X = X[inds, :]
-    Y = Y[inds, :]
+#     X = X[inds, :]
+#     Y = Y[inds, :]
 
-    return super(self.__class__, self).evaluate(X, Y, **kwargs)
+#     return super(self.__class__, self).evaluate(X, Y, **kwargs)
     
 def duplicate_data(X, Y, copy_list):
   def copy_data(X, Y, n_copies, label_idx):
@@ -464,7 +526,11 @@ def main(method = 'EG',
          do_add_corrupted_features = False,
          corruption_sigma_scaling = 1.0,
          kernel_type = 'unif',
-         max_nbr_points = 10000):
+         max_nbr_points = 10000,
+         svm_lam = 1e-5,
+         eg_lam = 4e-4,
+         ksvm_lam = 4e-4):
+
     data_o = convert.dataset_oakland(numpy_fn = 'data/oakland_part3_am_rf.node_features.npz',
                                      fn = 'data/oakland_part3_am_rf.node_features')
 
@@ -532,9 +598,6 @@ def main(method = 'EG',
 
         
         # classifier set up
-        svm_lam = 4e-4
-        eg_lam = 4e-4
-        ksvm_lam = 4e-4
         kwargs = {}
 
         if method == 'multi_svm':
