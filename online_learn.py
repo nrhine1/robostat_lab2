@@ -5,6 +5,7 @@ import numpy as np
 import numpy, pdb, warnings
 import os,sys
 import matplotlib.pyplot as plt
+import argh
 
 import convert_data_to_numpy as convert
 import sklearn.metrics
@@ -453,23 +454,28 @@ def add_corrupted_features(X, sigma_scaling =.1):
   X = numpy.hstack((X, noisy_X))
   return X
                                        
-
-def main():
+@argh.arg('--method', choices = ['EG', 'multi_svm', 'multi_ksvm'], required = True)
+@argh.arg('--kernel-type', choices = ['unif', 'poly', 'epane', 'dot'])
+@argh.set_all_toggleable()
+def main(method = 'EG',
+         do_copy = True,
+         random_features_dim = 0,
+         random_features_scaling = 1.0,
+         do_add_corrupted_features = False,
+         corruption_sigma_scaling = 1.0,
+         kernel_type = 'unif',
+         max_nbr_points = 10000):
     data_o = convert.dataset_oakland(numpy_fn = 'data/oakland_part3_am_rf.node_features.npz',
                                      fn = 'data/oakland_part3_am_rf.node_features')
 
     test_data_o = convert.dataset_oakland(numpy_fn = 'data/oakland_part3_an_rf.node_features.npz',
                                           fn = 'data/oakland_part3_an_rf.node_features')
-    method = 'multi_ksvm'
-    random_features_dim = 0
-    corruption_sigma_scaling = 1
-    do_add_corrupted_features = False
-    do_copy = True
     copy_list = [0, 0, 0, 0, 0]
-    noise_dim = random_features_dim + (do_add_corrupted_features) * 13
     compute_kernel_width = True
+    class_weights = None
 
-
+    #noise
+    noise_dim = random_features_dim + (do_add_corrupted_features) * 13
 
     if method == 'svm':
 
@@ -534,10 +540,11 @@ def main():
         if method == 'multi_svm':
           if do_copy:
             copy_list = [7, 10, 10, 0, 2]
-          learner = online_multi_svm(lam=svm_lam, nbr_classes=5, feature_size = data_o.features.shape[1])
+          learner = online_multi_svm(lam=svm_lam, nbr_classes=5, 
+                                     feature_size = data_o.features.shape[1] + noise_dim)
         elif method == 'EG':
           if do_copy:
-              copy_list = [5, 10, 10, 0, 2]
+              copy_list = [5, 50, 12, 0, 2]
           learner = online_exponentiated_sq_loss(nbr_classes=5, 
                                                  feature_size = data_o.features.shape[1] + noise_dim,
                                                  lam=eg_lam, 
@@ -546,10 +553,10 @@ def main():
           class_weights = np.array([5, 10, 10, 0, 2]) + 1.0
           kwargs = {'class_weights' : class_weights}
           learner = online_multi_kernel_svm(nbr_classes=5, 
-                                            feature_size = data_o.features.shape[1], 
+                                            feature_size = data_o.features.shape[1] + noise_dim, 
                                             lam=ksvm_lam,
-                                            max_nbr_pts = 5000,
-                                            kernel_func = get_kernel_func(kernel_type='unif', H=H)) 
+                                            max_nbr_pts = max_nbr_points,
+                                            kernel_func = get_kernel_func(kernel_type=kernel_type, H=H)) 
 
         # data duplication
         X,Y = duplicate_data(X, Y, copy_list)
@@ -578,21 +585,18 @@ def main():
         accuracy = np.sum(ypred == Y) / float(Y.shape[0])
     elif method == 'blr':
       # blr = bayesian_linear_regression(feature_size = data_o.features.shape[0])
-      raise RuntimeError("nope")
+      raise NotImplementedError("no blr")
     else:
       raise RuntimeError("method not understood")
 
-      
-    if method != 'multi_ksvm':
-        cum_losses = numpy.cumsum(losses - learner.lam * np.sum(learner.w * learner.w) / 2.)
-    else:
-        cum_losses = numpy.cumsum(losses)
+    # cum_losses = numpy.cumsum(losses - learner.lam * np.sum(learner.w * learner.w) / 2.)
 
-    print "right, accuracy: {}, {}".format(n_right, accuracy)
+    # print "right, accuracy: {}, {}".format(n_right, accuracy)
     
     y_test_pred, y_test_losses = learner.evaluate(X_test, 
                                                   Y_test,
-                                                  fit = False)
+                                                  fit = False,
+                                                  class_weights = class_weights)
     if method in ['svm']:
       ypred = ypred > 0
       ypred[ypred == 0] = -1
@@ -601,9 +605,9 @@ def main():
       y_test_pred[y_test_pred == 0] = -1
 
     # print "w: {}".format(learner.w)
-    plt.figure()
-    plt.plot(range(losses.shape[0]), (cum_losses) / learner.t)
-    plt.show(block = False)
+    # plt.figure()
+    # plt.plot(range(losses.shape[0]), (cum_losses) / learner.t)
+    # plt.show(block = False)
 
     cm_train = mlu.confusion_matrix(Y, ypred)
     cm_test = mlu.confusion_matrix(Y_test, y_test_pred)
@@ -626,4 +630,4 @@ def write_classification(X_points, Y_pred, fn = 'blah.txt'):
     
 
 if __name__ == '__main__':
-  pdbw.pdbwrap(main)()
+  pdbw.pdbwrap(argh.dispatch_command)(main)
